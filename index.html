@@ -50,6 +50,7 @@ th{background:#f0f4f7}
   <div class="search">
     <input id="globalSearch" placeholder="Search student by name or phone..." oninput="globalSearch()">
   </div>
+  <div id="cloudStatus" class="small" style="color:#fff;opacity:.9">☁️ Connecting to cloud database...</div>
 </header>
 
 <div class="container">
@@ -131,13 +132,61 @@ th{background:#f0f4f7}
   </section>
 </div>
 
+<script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-database-compat.js"></script>
 <script>
-let students = JSON.parse(localStorage.getItem('feetrack_students') || '[]');
-let currentIndex = null;
+const firebaseConfig = {
+  apiKey: "AIzaSyAfehPARxb9KyNR3S_RohRzRrzuAX8NE9c",
+  authDomain: "feetrack-megapro-2026.firebaseapp.com",
+  databaseURL: "https://feetrack-megapro-2026-default-rtdb.firebaseio.com",
+  projectId: "feetrack-megapro-2026",
+  storageBucket: "feetrack-megapro-2026.firebasestorage.app",
+  messagingSenderId: "614006068935",
+  appId: "1:614006068935:web:f1e583f8989c877b1490e2",
+  measurementId: "G-LQ5DXBTC0S"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+const studentsRef = db.ref('students');
 
+let students = [];
+let currentIndex = null;
+let firebaseLoaded = false;
+
+const localBackup = () => JSON.parse(localStorage.getItem('feetrack_students') || '[]');
+const cacheLocal = () => localStorage.setItem('feetrack_students', JSON.stringify(students.map(s => { const x={...s}; delete x._id; return x; })));
+
+studentsRef.on('value', snapshot => {
+  const data = snapshot.val();
+  if (!data) {
+    const local = localBackup();
+    if (local.length && !firebaseLoaded) {
+      const updates = {};
+      local.forEach(s => { updates[studentsRef.push().key] = s; });
+      studentsRef.update(updates).catch(err => alert('Firebase write error: ' + err.message));
+      return;
+    }
+    students = [];
+  } else {
+    students = Object.entries(data).map(([id, s]) => ({...s, _id:id}));
+    students.sort((a,b) => String(a.name||'').localeCompare(String(b.name||'')));
+  }
+  firebaseLoaded = true;
+  cacheLocal();
+  renderAll();
+  if (currentIndex !== null && !students[currentIndex]) { currentIndex = null; showPage('all'); }
+});
+
+studentsRef.on('value', () => {
+  const el = document.getElementById('cloudStatus');
+  if (el) { el.textContent = '☁️ Cloud database connected'; el.style.color = '#2e7d32'; }
+}, err => {
+  const el = document.getElementById('cloudStatus');
+  if (el) { el.textContent = '⚠️ Database access error'; el.style.color = '#c62828'; }
+});
 const money = n => '₹' + Number(n || 0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 const today = () => new Date().toISOString().slice(0,10);
-function save(){localStorage.setItem('feetrack_students',JSON.stringify(students));}
+function save(){ cacheLocal(); }
 function remaining(s){return Math.max(0,Number(s.totalFees)-s.installments.reduce((a,x)=>a+Number(x.amount),0));}
 function status(s){
   const r=remaining(s), total=Number(s.totalFees);
@@ -173,12 +222,19 @@ document.getElementById('studentForm').addEventListener('submit',e=>{
     installments:[{no:1,amount:first,date:document.getElementById('firstDate').value,mode:document.getElementById('firstMode').value}]
   };
   const idx=document.getElementById('editIndex').value;
-  if(idx==='') students.push(obj); else {
-    obj.installments=students[Number(idx)].installments;
-    obj.installments[0]={no:1,amount:first,date:document.getElementById('firstDate').value,mode:document.getElementById('firstMode').value};
-    students[Number(idx)]=obj;
+  let writePromise;
+  if(idx==='') {
+    const newRef = studentsRef.push();
+    writePromise = newRef.set(obj);
+  } else {
+    const existing = students[Number(idx)];
+    if(!existing || !existing._id) return alert('Student record could not be found. Please refresh and try again.');
+    obj.installments = existing.installments || [];
+    obj.installments[0] = {no:1,amount:first,date:document.getElementById('firstDate').value,mode:document.getElementById('firstMode').value};
+    writePromise = studentsRef.child(existing._id).set(obj);
   }
-  save(); alert('Student record saved successfully.'); resetStudentForm(); showPage('all');
+  writePromise.then(()=>{ alert('Student record saved successfully.'); resetStudentForm(); showPage('all'); })
+    .catch(err=>alert('Could not save student: '+err.message));
 });
 
 function renderInstallmentStudents(){
@@ -238,10 +294,15 @@ function addInstallment(){
   if(!amount || amount<=0) return alert('Please enter a valid amount.');
   if(s.installments.some(x=>x.no===no)) return alert('This installment has already been added.');
   if(amount>remaining(s)) return alert('Amount cannot be greater than the remaining fees.');
-  s.installments.push({no,amount,date:document.getElementById('installDate').value||today(),mode:document.getElementById('installMode').value});
-  s.installments.sort((a,b)=>a.no-b.no); save();
-  alert('Installment saved successfully. Remaining Fees: '+money(remaining(s)));
-  document.getElementById('installAmount').value=''; showInstallmentForm();
+  const updatedInstallments = [...(s.installments||[]), {no,amount,date:document.getElementById('installDate').value||today(),mode:document.getElementById('installMode').value}];
+  updatedInstallments.sort((a,b)=>a.no-b.no);
+  studentsRef.child(s._id).child('installments').set(updatedInstallments)
+    .then(()=>{
+      s.installments = updatedInstallments;
+      alert('Installment saved successfully. Remaining Fees: '+money(remaining(s)));
+      document.getElementById('installAmount').value=''; showInstallmentForm();
+    })
+    .catch(err=>alert('Could not save installment: '+err.message));
 }
 function renderAll(){
   const q=(document.getElementById('allSearch').value||'').toLowerCase();
@@ -284,7 +345,9 @@ function editCurrent(){
 function deleteCurrent(){
   if(currentIndex===null)return;
   if(confirm('Are you sure? This student and the fee record will be deleted.')){
-    students.splice(currentIndex,1);save();currentIndex=null;alert('Student deleted.');showPage('all');
+    const s=students[currentIndex];
+    studentsRef.child(s._id).remove().then(()=>{ currentIndex=null; alert('Student deleted.'); showPage('all'); })
+      .catch(err=>alert('Could not delete student: '+err.message));
   }
 }
 function globalSearch(){
