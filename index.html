@@ -52,8 +52,7 @@ th{background:#f0f4f7}
     <h1>FeeTrack</h1>
     <p>Megapro Computers · Secure Login</p>
     <form id="loginForm">
-      <div class="field"><label>Email</label><input id="loginEmail" type="email" autocomplete="username" required placeholder="Enter your email"></div>
-      <div class="field"><label>Password</label><input id="loginPassword" type="password" autocomplete="current-password" required placeholder="Enter your password"></div>
+      <div class="field"><label>Password</label><input id="loginPassword" type="password" autocomplete="current-password" required placeholder="Enter password"></div>
       <div id="loginError" class="login-error"></div>
       <button class="btn primary login-btn" type="submit" id="loginBtn">🔐 Login</button>
     </form>
@@ -200,7 +199,8 @@ function firebaseAuthMessage(err){
 
 document.getElementById('loginForm').addEventListener('submit', e=>{
   e.preventDefault();
-  const email=document.getElementById('loginEmail').value.trim();
+  // The FeeTrack admin email is kept internal so the opening screen only asks for the password.
+  const email='16210010@mkcl.org';
   const password=document.getElementById('loginPassword').value;
   const btn=document.getElementById('loginBtn');
   setLoginError('');
@@ -256,7 +256,7 @@ auth.onAuthStateChanged(user=>{
   if(user){
     loginPage.classList.add('hidden');
     appShell.classList.remove('hidden');
-    if(emailEl) emailEl.textContent=user.email||'';
+    if(emailEl) emailEl.textContent='';
     if(statusEl){statusEl.textContent='☁️ Connecting to cloud database...';statusEl.style.color='#fff';}
     attachStudentsListener();
   }else{
