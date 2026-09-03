@@ -39,9 +39,27 @@ th{background:#f0f4f7}
 .small{font-size:13px;color:#666}
 .empty{text-align:center;padding:30px;color:#777}
 @media(max-width:700px){.menu,.form-grid,.detail-grid{grid-template-columns:1fr}header{align-items:flex-start}table{font-size:13px;display:block;overflow-x:auto}}
+.login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:#f4f6f8}
+.login-card{width:100%;max-width:420px;background:white;border-radius:14px;padding:30px;box-shadow:0 5px 24px #00000018}
+.login-card h1{margin:0;color:#173f5f;font-size:30px}.login-card p{color:#666;margin-top:7px}
+.login-card .field{margin-top:16px}.login-card label{margin-bottom:7px}.login-error{display:none;background:#ffe8e8;color:#a11b1b;padding:10px;border-radius:8px;margin-top:15px;font-size:14px}
+.login-btn{width:100%;margin-top:20px}.userbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.logout-btn{border:1px solid #ffffff55;background:#ffffff18;color:#fff;padding:8px 11px;border-radius:7px;cursor:pointer;font-weight:bold}
 </style>
 </head>
 <body>
+<div id="loginPage" class="login-wrap">
+  <div class="login-card">
+    <h1>FeeTrack</h1>
+    <p>Megapro Computers · Secure Login</p>
+    <form id="loginForm">
+      <div class="field"><label>Email</label><input id="loginEmail" type="email" autocomplete="username" required placeholder="Enter your email"></div>
+      <div class="field"><label>Password</label><input id="loginPassword" type="password" autocomplete="current-password" required placeholder="Enter your password"></div>
+      <div id="loginError" class="login-error"></div>
+      <button class="btn primary login-btn" type="submit" id="loginBtn">🔐 Login</button>
+    </form>
+  </div>
+</div>
+<div id="appShell" class="hidden">
 <header>
   <div>
     <h1>FeeTrack</h1>
@@ -50,7 +68,11 @@ th{background:#f0f4f7}
   <div class="search">
     <input id="globalSearch" placeholder="Search student by name or phone..." oninput="globalSearch()">
   </div>
-  <div id="cloudStatus" class="small" style="color:#fff;opacity:.9">☁️ Connecting to cloud database...</div>
+  <div class="userbar">
+    <div id="cloudStatus" class="small" style="color:#fff;opacity:.9">☁️ Waiting for login...</div>
+    <span id="userEmail" class="small" style="color:#fff;opacity:.9"></span>
+    <button class="logout-btn" onclick="logout()">Logout</button>
+  </div>
 </header>
 
 <div class="container">
@@ -131,8 +153,10 @@ th{background:#f0f4f7}
     </div>
   </section>
 </div>
+</div>
 
 <script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-database-compat.js"></script>
 <script>
 const firebaseConfig = {
@@ -146,44 +170,108 @@ const firebaseConfig = {
   measurementId: "G-LQ5DXBTC0S"
 };
 firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
 const db = firebase.database();
 const studentsRef = db.ref('students');
-
 let students = [];
 let currentIndex = null;
 let firebaseLoaded = false;
+let studentsListenerAttached = false;
 
 const localBackup = () => JSON.parse(localStorage.getItem('feetrack_students') || '[]');
 const cacheLocal = () => localStorage.setItem('feetrack_students', JSON.stringify(students.map(s => { const x={...s}; delete x._id; return x; })));
 
-studentsRef.on('value', snapshot => {
-  const data = snapshot.val();
-  if (!data) {
-    const local = localBackup();
-    if (local.length && !firebaseLoaded) {
-      const updates = {};
-      local.forEach(s => { updates[studentsRef.push().key] = s; });
-      studentsRef.update(updates).catch(err => alert('Firebase write error: ' + err.message));
-      return;
-    }
-    students = [];
-  } else {
-    students = Object.entries(data).map(([id, s]) => ({...s, _id:id}));
-    students.sort((a,b) => String(a.name||'').localeCompare(String(b.name||'')));
-  }
-  firebaseLoaded = true;
-  cacheLocal();
-  renderAll();
-  if (currentIndex !== null && !students[currentIndex]) { currentIndex = null; showPage('all'); }
+function setLoginError(message){
+  const el=document.getElementById('loginError');
+  el.textContent=message||'';
+  el.style.display=message?'block':'none';
+}
+function firebaseAuthMessage(err){
+  const code=err && err.code || '';
+  const map={
+    'auth/invalid-credential':'Invalid email or password.',
+    'auth/invalid-login-credentials':'Invalid email or password.',
+    'auth/user-disabled':'This account has been disabled.',
+    'auth/too-many-requests':'Too many login attempts. Please try again later.',
+    'auth/network-request-failed':'Network error. Check your internet connection.'
+  };
+  return map[code] || (err && err.message) || 'Login failed. Please try again.';
+}
+
+document.getElementById('loginForm').addEventListener('submit', e=>{
+  e.preventDefault();
+  const email=document.getElementById('loginEmail').value.trim();
+  const password=document.getElementById('loginPassword').value;
+  const btn=document.getElementById('loginBtn');
+  setLoginError('');
+  btn.disabled=true; btn.textContent='Signing in...';
+  auth.signInWithEmailAndPassword(email,password)
+    .catch(err=>setLoginError(firebaseAuthMessage(err)))
+    .finally(()=>{btn.disabled=false;btn.textContent='🔐 Login';});
 });
 
-studentsRef.on('value', () => {
-  const el = document.getElementById('cloudStatus');
-  if (el) { el.textContent = '☁️ Cloud database connected'; el.style.color = '#2e7d32'; }
-}, err => {
-  const el = document.getElementById('cloudStatus');
-  if (el) { el.textContent = '⚠️ Database access error'; el.style.color = '#c62828'; }
+function attachStudentsListener(){
+  if(studentsListenerAttached) return;
+  studentsListenerAttached=true;
+  firebaseLoaded=false;
+  studentsRef.on('value', snapshot => {
+    const data=snapshot.val();
+    if(!data){
+      const local=localBackup();
+      if(local.length && !firebaseLoaded){
+        const updates={};
+        local.forEach(s=>{updates[studentsRef.push().key]=s;});
+        studentsRef.update(updates).catch(err=>alert('Firebase write error: '+err.message));
+        return;
+      }
+      students=[];
+    }else{
+      students=Object.entries(data).map(([id,s])=>({ ...s, _id:id, installments:Array.isArray(s.installments)?s.installments:[] }));
+      students.sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+    }
+    firebaseLoaded=true;
+    cacheLocal();
+    renderAll();
+    renderInstallmentStudents();
+    if(currentIndex!==null && !students[currentIndex]){currentIndex=null;showPage('all');}
+    const el=document.getElementById('cloudStatus');
+    if(el){el.textContent='☁️ Cloud database connected';el.style.color='#d9f2df';}
+  }, err=>{
+    const el=document.getElementById('cloudStatus');
+    if(el){el.textContent='⚠️ Database access denied';el.style.color='#ffdddd';}
+  });
+}
+function detachStudentsListener(){
+  if(!studentsListenerAttached) return;
+  studentsRef.off();
+  studentsListenerAttached=false;
+  students=[]; currentIndex=null; firebaseLoaded=false;
+}
+
+auth.onAuthStateChanged(user=>{
+  const loginPage=document.getElementById('loginPage');
+  const appShell=document.getElementById('appShell');
+  const emailEl=document.getElementById('userEmail');
+  const statusEl=document.getElementById('cloudStatus');
+  if(user){
+    loginPage.classList.add('hidden');
+    appShell.classList.remove('hidden');
+    if(emailEl) emailEl.textContent=user.email||'';
+    if(statusEl){statusEl.textContent='☁️ Connecting to cloud database...';statusEl.style.color='#fff';}
+    attachStudentsListener();
+  }else{
+    detachStudentsListener();
+    appShell.classList.add('hidden');
+    loginPage.classList.remove('hidden');
+    if(emailEl) emailEl.textContent='';
+    document.getElementById('loginPassword').value='';
+  }
 });
+
+function logout(){
+  auth.signOut().catch(err=>alert('Could not log out: '+err.message));
+}
+
 const money = n => '₹' + Number(n || 0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 const today = () => new Date().toISOString().slice(0,10);
 function save(){ cacheLocal(); }
